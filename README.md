@@ -1,5 +1,8 @@
 # iCloud NoSync: Exclude Files/Folders from iCloud Drive Sync on macOS
 
+<img width="1280" height="640" alt="iCloudNoSync" src="https://github.com/user-attachments/assets/4890deab-cb62-448a-8901-224bbe50457d" />
+
+
 This repository provides a Zsh function called `nosync` that allows you to easily mark files or folders (e.g., `node_modules`) as excluded from iCloud Drive syncing. It uses an undocumented but reliable `xattr` attribute (`com.apple.fileprovider.ignore#P`) to keep items local to your Mac, preventing unnecessary uploads and saving iCloud storage.
 
 This is particularly useful for developers with projects in iCloud-synced folders like Documents or Desktop, where large temporary folders like `node_modules` can bloat your sync.
