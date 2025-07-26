@@ -1,6 +1,9 @@
 # Mark file(s) or folder(s) to be excluded from iCloud sync, with prompt to create missing ones
 nosync() {
     local recursive=false
+    local is_directory=false
+    local is_file=false
+    local unset=false
 
     # Check for help flag first
     if [[ "$1" == "--help" || "$1" == "-h" ]]; then
@@ -10,19 +13,26 @@ nosync() {
         echo "Options:"
         echo "  --help, -h          Display this help message and exit."
         echo "  --recursive, -r     Recursively search from the current directory for items"
-        echo "                      matching the given names (files or folders) and mark them."
-        echo "                      No creation prompt in this mode."
+        echo "                      matching the given names (files or folders) and mark/unmark them."
+        echo "                      No creation prompt in this mode. Requires -d or -f."
+        echo "  --directory, -d     With -r, target directories only (prunes subdirs after marking)."
+        echo "  --file, -f          With -r, target files only."
+        echo "  --unset, -u         Remove the exclusion attribute to allow syncing again."
         echo ""
         echo "Behavior:"
-        echo "  - If an item exists, it is marked as non-syncing using xattr."
-        echo "  - If an item does not exist (non-recursive), prompts to create it as a file (f), directory (d), or skip (s)."
+        echo "  - Without --unset: Adds com.apple.fileprovider.ignore#P xattr to exclude from sync."
+        echo "  - With --unset: Removes the attribute to resume sync."
+        echo "  - If an item does not exist (non-recursive, without --unset), prompts to create it as a file (f), directory (d), or skip (s)."
         echo "  - Use 'f' or 'F' to create a file, 'd' or 'D' to create a directory, or 's' (or any other input) to skip."
         echo ""
         echo "Examples:"
         echo "  nosync node_modules          # Mark node_modules folder"
         echo "  nosync temp.cache            # Mark a file"
         echo "  nosync node_modules dist     # Mark multiple items"
-        echo "  nosync -r node_modules       # Recursively mark all node_modules folders"
+        echo "  nosync -r -d node_modules    # Recursively mark all node_modules directories"
+        echo "  nosync -r -f temp.cache      # Recursively mark all temp.cache files"
+        echo "  nosync --unset node_modules  # Unmark node_modules folder"
+        echo "  nosync -u -r -d node_modules # Recursively unmark all node_modules directories"
         return 0
     fi
 
@@ -31,6 +41,18 @@ nosync() {
         case $1 in
             --recursive|-r)
                 recursive=true
+                shift
+                ;;
+            --directory|-d)
+                is_directory=true
+                shift
+                ;;
+            --file|-f)
+                is_file=true
+                shift
+                ;;
+            --unset|-u)
+                unset=true
                 shift
                 ;;
             *)
@@ -45,13 +67,50 @@ nosync() {
     fi
 
     if $recursive; then
+        if ! $is_directory && ! $is_file; then
+            echo "Error: -r requires -d or -f."
+            return 1
+        fi
+        if $is_directory && $is_file; then
+            echo "Error: Cannot use -d and -f together."
+            return 1
+        fi
+    else
+        if $is_directory || $is_file; then
+            echo "Error: -d and -f require -r."
+            return 1
+        fi
+    fi
+
+    local xattr_cmd
+    local action_msg
+    local action_present="Marked"
+    local action_past="Marked"
+    if $unset; then
+        xattr_cmd="/usr/bin/xattr -d 'com.apple.fileprovider.ignore#P' \"%s\" || echo \"Failed to unmark %s (error: \$?)\""
+        action_msg="Unmarked %s for iCloud sync."
+        action_present="Unmarking"
+        action_past="Unmarked"
+    else
+        xattr_cmd="/usr/bin/xattr -w 'com.apple.fileprovider.ignore#P' 1 \"%s\" || echo \"Failed to mark %s (error: \$?)\""
+        action_msg="Marked %s as non-syncing for iCloud."
+    fi
+
+    if $recursive; then
+        local -a find_args
+        find_args=( . )
+        if $is_directory; then
+            find_args+=( -type d -name )
+        elif $is_file; then
+            find_args+=( -type f -name )
+        fi
         for item in "$@"; do
             local found=false
             while IFS= read -r -d '' path; do
-                /usr/bin/xattr -w 'com.apple.fileprovider.ignore#P' 1 "$path" || echo "Failed to mark $path (error: $?)"
-                echo "Marked $path as non-syncing for iCloud."
+                eval $(printf "$xattr_cmd" "$path" "$path")
+                printf "$action_msg\n" "$path"
                 found=true
-            done < <(find . -name "$item" -print0)
+            done < <(/usr/bin/find "${find_args[@]}" "$item" -prune -print0)
             if ! $found; then
                 echo "No matches found for $item recursively."
             fi
@@ -60,33 +119,37 @@ nosync() {
         # Non-recursive mode: process each item directly
         for item in "$@"; do
             if [ -e "$item" ]; then
-                /usr/bin/xattr -w 'com.apple.fileprovider.ignore#P' 1 "$item" || echo "Failed to mark $item (error: $?)"
-                echo "Marked $item as non-syncing for iCloud."
+                eval $(printf "$xattr_cmd" "$item" "$item")
+                printf "$action_msg\n" "$item"
             else
-                read -p "$item does not exist. Create it as a (f)ile, (d)irectory, or (s)kip? " answer
-                case "$answer" in
-                    [Ff])
-                        if touch "$item"; then
-                            /usr/bin/xattr -w 'com.apple.fileprovider.ignore#P' 1 "$item" || echo "Failed to mark $item (error: $?)"
-                            echo "Created and marked $item as non-syncing for iCloud."
-                        else
-                            echo "Error: Could not create file $item."
-                            return 1
-                        fi
-                        ;;
-                    [Dd])
-                        if mkdir -p "$item"; then
-                            /usr/bin/xattr -w 'com.apple.fileprovider.ignore#P' 1 "$item" || echo "Failed to mark $item (error: $?)"
-                            echo "Created and marked $item as non-syncing for iCloud."
-                        else
-                            echo "Error: Could not create directory $item."
-                            return 1
-                        fi
-                        ;;
-                    [Ss]*|*)
-                        echo "Skipped $item (not created)."
-                        ;;
-                esac
+                if $unset; then
+                    echo "Skipped $item: Does not exist (nothing to unmark)."
+                else
+                    read -p "$item does not exist. Create it as a (f)ile, (d)irectory, or (s)kip? " answer
+                    case "$answer" in
+                        [Ff])
+                            if /bin/touch "$item"; then
+                                eval $(printf "$xattr_cmd" "$item" "$item")
+                                printf "Created and $action_past %s as non-syncing for iCloud.\n" "$item"
+                            else
+                                echo "Error: Could not create file $item."
+                                return 1
+                            fi
+                            ;;
+                        [Dd])
+                            if /bin/mkdir -p "$item"; then
+                                eval $(printf "$xattr_cmd" "$item" "$item")
+                                printf "Created and $action_past %s as non-syncing for iCloud.\n" "$item"
+                            else
+                                echo "Error: Could not create directory $item."
+                                return 1
+                            fi
+                            ;;
+                        [Ss]*|*)
+                            echo "Skipped $item (not created)."
+                            ;;
+                    esac
+                fi
             fi
         done
     fi
