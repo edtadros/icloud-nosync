@@ -2,7 +2,9 @@
 
 <img width="1280" height="640" alt="iCloudNoSync" src="https://github.com/user-attachments/assets/4890deab-cb62-448a-8901-224bbe50457d" />
 
-This repository provides a Zsh function called `nosync` that allows you to easily mark files or folders (e.g., `node_modules`) as excluded from iCloud Drive syncing. It uses an undocumented but reliable `xattr` attribute (`com.apple.fileprovider.ignore#P`) to keep items local to your Mac, preventing unnecessary uploads and saving iCloud storage.
+
+
+This repository provides a standalone Zsh script called `nosync` that allows you to easily mark files or folders (e.g., `node_modules`) as excluded from iCloud Drive syncing. It uses an undocumented but reliable `xattr` attribute (`com.apple.fileprovider.ignore#P`) to keep items local to your Mac, preventing unnecessary uploads and saving iCloud storage.
 
 This is particularly useful for developers with projects in iCloud-synced folders like Documents or Desktop, where large temporary folders like `node_modules` can bloat your sync.
 
@@ -13,7 +15,9 @@ This is particularly useful for developers with projects in iCloud-synced folder
 - Unmarks items (removes the attribute) to resume syncing with --unset.
 - Prompts to create missing items (as a file or directory) before marking in non-recursive mode.
 - Supports multiple items at once (e.g., `nosync node_modules dist`).
-- Recursive search (--recursive or -r) to mark/unmark all matching items, with --directory (-d) for directories (prunes subdirs after marking) or --file (-f) for files.
+- Recursive search (--recursive or -r) to mark/unmark all matching items, with --directory (-d) for directories (prunes subdirs after marking unless --no-prune) or --file (-f) for files.
+- Verbose mode (--verbose or -v) to list processed paths.
+- Shows a spinner indicator in recursive mode to show activity.
 - Built-in help: Run `nosync --help` for usage details.
 - Safe and reversible: Use --unset to remove the attribute.
 - Uses full paths for commands to avoid PATH issues.
@@ -25,25 +29,30 @@ This is particularly useful for developers with projects in iCloud-synced folder
    cd icloud-nosync
    ```
 
-2. **Add to Your Shell**:
-   - Copy the contents of `nosync.zsh` into your `~/.zshrc` file:
+2. **Make the Script Executable**:
+   - Ensure the script is executable:
      ```
-     nano ~/.zshrc
-     # Paste the function at the bottom
+     chmod +x nosync
      ```
-   - Or source the file directly in `~/.zshrc`:
+
+3. **Add to Your PATH**:
+   - Add the directory containing `nosync` to your PATH in `~/.zshrc` (or `~/.bash_profile` for Bash):
      ```
-     source ~/path/to/icloud-nosync/nosync.zsh
+     export PATH="/path/to/icloud-nosync:$PATH"
      ```
    - Reload your shell:
      ```
      source ~/.zshrc
      ```
+   - Alternatively, move the script to a directory already in your PATH (e.g., `/usr/local/bin`):
+     ```
+     mv nosync /usr/local/bin/
+     ```
 
-If you're using Bash (not default on macOS), minor tweaks may be needed for compatibility (e.g., change `[[ ]]` to `[ ]`).
+If you're using Bash (not default on macOS), the script is mostly compatible, but test thoroughly.
 
 ## Usage
-Run the function in your terminal from the directory containing the items.
+Run the script from the directory containing the items.
 
 ### Basic Examples
 - Mark a folder:
@@ -69,6 +78,14 @@ Run the function in your terminal from the directory containing the items.
 - Recursively unmark all temp.cache files:
   ```
   nosync -u -r -f temp.cache
+  ```
+- Recursively mark with verbose output:
+  ```
+  nosync -v -r -d node_modules
+  ```
+- Recursively mark without pruning subdirs:
+  ```
+  nosync -r -d --no-prune node_modules
   ```
 
 ### If an Item Doesn't Exist (Non-Recursive Mode Only)
@@ -103,16 +120,20 @@ Or manually:
 xattr -d 'com.apple.fileprovider.ignore#P' node_modules
 ```
 
-## The Code (`nosync.zsh`)
-For reference, here's the full function:
+## The Code (`nosync`)
+For reference, here's the full script:
 
 ```bash
+#!/usr/bin/env zsh
+
 # Mark file(s) or folder(s) to be excluded from iCloud sync, with prompt to create missing ones
 nosync() {
     local recursive=false
     local is_directory=false
     local is_file=false
     local unset=false
+    local verbose=false
+    local no_prune=false
 
     # Check for help flag first
     if [[ "$1" == "--help" || "$1" == "-h" ]]; then
@@ -124,15 +145,19 @@ nosync() {
         echo "  --recursive, -r     Recursively search from the current directory for items"
         echo "                      matching the given names (files or folders) and mark/unmark them."
         echo "                      No creation prompt in this mode. Requires -d or -f."
-        echo "  --directory, -d     With -r, target directories only (prunes subdirs after marking)."
+        echo "  --directory, -d     With -r, target directories only (prunes subdirs after marking unless --no-prune)."
         echo "  --file, -f          With -r, target files only."
         echo "  --unset, -u         Remove the exclusion attribute to allow syncing again."
+        echo "  --verbose, -v       Enable detailed output, including listing processed paths."
+        echo "  --no-prune          With -r -d, disable prune to process subdirs of matched directories."
         echo ""
         echo "Behavior:"
         echo "  - Without --unset: Adds com.apple.fileprovider.ignore#P xattr to exclude from sync."
         echo "  - With --unset: Removes the attribute to resume sync."
         echo "  - If an item does not exist (non-recursive, without --unset), prompts to create it as a file (f), directory (d), or skip (s)."
         echo "  - Use 'f' or 'F' to create a file, 'd' or 'D' to create a directory, or 's' (or any other input) to skip."
+        echo "  - In recursive mode, shows a spinner indicator; with --verbose, also lists paths."
+        echo "  - 5-second timeout on xattr calls to prevent hangs (requires coreutils via Homebrew)."
         echo ""
         echo "Examples:"
         echo "  nosync node_modules          # Mark node_modules folder"
@@ -142,6 +167,8 @@ nosync() {
         echo "  nosync -r -f temp.cache      # Recursively mark all temp.cache files"
         echo "  nosync --unset node_modules  # Unmark node_modules folder"
         echo "  nosync -u -r -d node_modules # Recursively unmark all node_modules directories"
+        echo "  nosync -v -r -d node_modules # Recursively mark with verbose output"
+        echo "  nosync -r -d --no-prune node_modules # Recursively mark without pruning subdirs"
         return 0
     fi
 
@@ -164,6 +191,14 @@ nosync() {
                 unset=true
                 shift
                 ;;
+            --verbose|-v)
+                verbose=true
+                shift
+                ;;
+            --no-prune)
+                no_prune=true
+                shift
+                ;;
             *)
                 break
                 ;;
@@ -184,9 +219,17 @@ nosync() {
             echo "Error: Cannot use -d and -f together."
             return 1
         fi
+        if $no_prune && ! $is_directory; then
+            echo "Error: --no-prune requires -d."
+            return 1
+        fi
     else
         if $is_directory || $is_file; then
             echo "Error: -d and -f require -r."
+            return 1
+        fi
+        if $no_prune; then
+            echo "Error: --no-prune requires -r -d."
             return 1
         fi
     fi
@@ -213,22 +256,37 @@ nosync() {
         elif $is_file; then
             find_args+=( -type f -name )
         fi
+        local prune_arg=""
+        if $is_directory && ! $no_prune; then
+            prune_arg="-prune"
+        fi
+        # Start spinner in background
+        spinner &
+        local spinner_pid=$!
+        trap "kill $spinner_pid 2>/dev/null" EXIT
+
         for item in "$@"; do
             local found=false
             while IFS= read -r -d '' path; do
-                eval $(printf "$xattr_cmd" "$path" "$path")
+                if $verbose; then
+                    echo "Processing $path"
+                fi
+                ( gtimeout 5 eval $(printf "$xattr_cmd" "$path" "$path") ) || echo "Timed out processing $path"
                 printf "$action_msg\n" "$path"
                 found=true
-            done < <(/usr/bin/find "${find_args[@]}" "$item" -prune -print0)
+            done < <(/usr/bin/find "${find_args[@]}" "$item" $prune_arg -print0)
             if ! $found; then
                 echo "No matches found for $item recursively."
             fi
         done
+        kill $spinner_pid 2>/dev/null
+        trap - EXIT
+        echo ""  # New line after spinner
     else
         # Non-recursive mode: process each item directly
         for item in "$@"; do
             if [ -e "$item" ]; then
-                eval $(printf "$xattr_cmd" "$item" "$item")
+                ( gtimeout 5 eval $(printf "$xattr_cmd" "$item" "$item") ) || echo "Timed out processing $item"
                 printf "$action_msg\n" "$item"
             else
                 if $unset; then
@@ -238,7 +296,7 @@ nosync() {
                     case "$answer" in
                         [Ff])
                             if /bin/touch "$item"; then
-                                eval $(printf "$xattr_cmd" "$item" "$item")
+                                ( gtimeout 5 eval $(printf "$xattr_cmd" "$item" "$item") ) || echo "Timed out processing $item"
                                 printf "Created and $action_past %s as non-syncing for iCloud.\n" "$item"
                             else
                                 echo "Error: Could not create file $item."
@@ -247,7 +305,7 @@ nosync() {
                             ;;
                         [Dd])
                             if /bin/mkdir -p "$item"; then
-                                eval $(printf "$xattr_cmd" "$item" "$item")
+                                ( gtimeout 5 eval $(printf "$xattr_cmd" "$item" "$item") ) || echo "Timed out processing $item"
                                 printf "Created and $action_past %s as non-syncing for iCloud.\n" "$item"
                             else
                                 echo "Error: Could not create directory $item."
@@ -263,18 +321,23 @@ nosync() {
         done
     fi
 }
+
+# Spinner function for recursive mode
+spinner() {
+    local spin='-\|/'
+    local i=0
+    while true; do
+        printf "\rProcessing... %c" "${spin:i++%${#spin}:1}"
+        sleep 0.1
+    done
+}
+
+nosync "$@"
 ```
 
-## Limitations and Alternatives
-- **macOS-Only**: Relies on Apple's `xattr` and iCloud Drive.
-- **Undocumented**: The attribute could change in future macOS updates—test after upgrades.
-- **Alternatives**: Rename items with `.nosync` (e.g., `node_modules.nosync`) and symlink back, or move projects out of iCloud folders.
-- **Not Synced**: Marked items won't appear on other devices; regenerate as needed (e.g., `npm install`).
+### Installation Notes for gtimeout
+After `brew install coreutils`, `gtimeout` will be in `/opt/homebrew/bin/gtimeout` (on Apple Silicon) or `/usr/local/bin/gtimeout` (Intel). If your PATH includes Homebrew bins (common in .zshrc), it should work. Otherwise, add `export PATH="/opt/homebrew/bin:$PATH"` to .zshrc and source it.
 
-## Contributing
-Feel free to fork and submit pull requests for improvements, like Bash support or automation scripts.
+Now, `nosync node_modules` should add the attribute and output "Marked node_modules as non-syncing for iCloud." without hanging, thanks to the timeout. If it times out, the attribute won't be added, but the script will continue.
 
-## License
-MIT License (or your choice—update accordingly).
-
-If you encounter issues, open an issue on this repo!
+If this still doesn't work, the xattr method is not viable on your system—switch to .nosync or another approach.
