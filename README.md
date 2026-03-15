@@ -32,7 +32,7 @@ This is particularly useful for developers with projects in iCloud-synced folder
 2. **Make the Script Executable**:
    - Ensure the script is executable:
      ```
-     chmod +x nosync
+     chmod +x nosync.zsh
      ```
 
 3. **Add to Your PATH**:
