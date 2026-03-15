@@ -25,7 +25,7 @@ This is particularly useful for developers with projects in iCloud-synced folder
 ## Installation
 1. **Clone the Repository**:
    ```
-   git clone https://github.com/yourusername/icloud-nosync.git
+   git clone https://github.com/edtadros/icloud-nosync.git
    cd icloud-nosync
    ```
 
